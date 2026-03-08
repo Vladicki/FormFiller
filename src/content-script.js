@@ -428,19 +428,38 @@ class FieldFiller {
     if (tagName === "input") {
       if (inputType === "radio") {
         const generatedValue = this.generateCV_Data(targetElement);
-        if (generatedValue && targetElement.value === generatedValue) {
-          targetElement.checked = true;
-          this.fireEvents(targetElement);
+        if (generatedValue) {
+          const normalizedGenerated = normalizeText(generatedValue);
+          const elementValue = targetElement.value;
+          const elementIdentity = this.getElementName(targetElement);
+
+          if (
+            elementValue === generatedValue ||
+            normalizeText(elementValue) === normalizedGenerated ||
+            normalizeText(elementIdentity).includes(normalizedGenerated)
+          ) {
+            targetElement.checked = true;
+          }
         }
       } else if (inputType === "checkbox") {
         const generatedValue = this.generateCV_Data(targetElement);
-        if (
-          generatedValue &&
-          (generatedValue.toLowerCase() === "yes" ||
-            generatedValue.toLowerCase() === "true")
-        ) {
-          targetElement.checked = true;
-          this.fireEvents(targetElement);
+        if (generatedValue) {
+          const lowVal = generatedValue.toString().toLowerCase();
+          if (
+            lowVal === "yes" ||
+            lowVal === "true" ||
+            lowVal === "1" ||
+            lowVal === "checked"
+          ) {
+            targetElement.checked = true;
+          } else if (
+            lowVal === "no" ||
+            lowVal === "false" ||
+            lowVal === "0" ||
+            lowVal === "unchecked"
+          ) {
+            targetElement.checked = false;
+          }
         }
       } else if (inputType === "file") {
         const normalizedName = this.getElementName(targetElement).toLowerCase();
@@ -470,26 +489,65 @@ class FieldFiller {
         targetElement.value = this.previousValue;
       } else {
         const generatedValue = this.generateCV_Data(targetElement);
-        this.previousValue = generatedValue;
-        targetElement.value = generatedValue;
+        if (generatedValue) {
+          this.previousValue = generatedValue;
+          targetElement.value = generatedValue;
+        }
       }
     } else if (tagName === "textarea") {
-      targetElement.value = this.generateCV_Data(targetElement);
+      const generatedValue = this.generateCV_Data(targetElement);
+      if (generatedValue) targetElement.value = generatedValue;
     } else if (tagName === "select") {
       const generatedValue = this.generateCV_Data(targetElement);
       if (generatedValue) {
+        const normalizedGenerated = normalizeText(generatedValue);
+        let bestMatchIndex = -1;
+        let bestMatchScore = 0; // 3: Exact, 2: Normalized Exact, 1: Partial
+
         for (
           let optionIndex = 0;
           optionIndex < targetElement.options.length;
           optionIndex++
         ) {
-          if (
-            targetElement.options[optionIndex].value === generatedValue ||
-            targetElement.options[optionIndex].text === generatedValue
-          ) {
-            targetElement.options[optionIndex].selected = true;
+          const option = targetElement.options[optionIndex];
+          const optionValue = option.value;
+          const optionText = option.text;
+          const normalizedVal = normalizeText(optionValue);
+          const normalizedText = normalizeText(optionText);
+
+          // Priority 1: Exact match
+          if (optionValue === generatedValue || optionText === generatedValue) {
+            bestMatchIndex = optionIndex;
+            bestMatchScore = 3;
             break;
           }
+
+          // Priority 2: Normalized exact match
+          if (
+            bestMatchScore < 2 &&
+            (normalizedVal === normalizedGenerated ||
+              normalizedText === normalizedGenerated)
+          ) {
+            bestMatchIndex = optionIndex;
+            bestMatchScore = 2;
+          }
+
+          // Priority 3: Partial match (contains)
+          if (
+            bestMatchScore < 1 &&
+            normalizedGenerated.length > 0 &&
+            (normalizedVal.includes(normalizedGenerated) ||
+              normalizedText.includes(normalizedGenerated) ||
+              normalizedGenerated.includes(normalizedVal) ||
+              normalizedGenerated.includes(normalizedText))
+          ) {
+            bestMatchIndex = optionIndex;
+            bestMatchScore = 1;
+          }
+        }
+
+        if (bestMatchIndex !== -1) {
+          targetElement.selectedIndex = bestMatchIndex;
         }
       }
     }
