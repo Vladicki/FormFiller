@@ -1,0 +1,45 @@
+{
+    "manifest_version": 3,
+    "name": "Applier",
+    "version": "1.0",
+    "description": "A form filler that fills all inputs on a page with data.",
+    "action": {
+        "default_icon": "./images/icon.png",
+        "default_title": "Easy Fill Forms"
+    },
+    "permissions": [
+        "contextMenus",
+        "activeTab",
+        "storage",
+        "scripting"
+    ],
+    "background": {
+        "scripts": [
+            "src/service-worker.js"
+        ],
+        "type": "module"
+    },
+    "content_scripts": [
+        {
+            "matches": [
+                "<all_urls>"
+            ],
+            "js": [
+                "cv_data.js",
+                "src/content-script.js"
+            ],
+            "all_frames": true
+        }
+    ],
+    "commands": {
+        "fill_all_inputs": {
+            "description": "Fill all inputs"
+        },
+        "fill_this_form": {
+            "description": "Fill this form"
+        },
+        "fill_this_input": {
+            "description": "Fill this input"
+        }
+    }
+}
