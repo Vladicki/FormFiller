@@ -121,6 +121,21 @@ class FieldFiller {
     this.profileIndex = profileIndex;
     this.previousValue = "";
     this.previousPassword = "";
+    this.resetGroupTracking();
+  }
+
+  /**
+   * Resets tracking for grouped fields (Jobs, Education).
+   */
+  resetGroupTracking() {
+    this.groupIndices = {
+      job: 0,
+      education: 0,
+    };
+    this.filledInGroup = {
+      job: new Set(),
+      education: new Set(),
+    };
   }
 
   /**
@@ -246,9 +261,8 @@ class FieldFiller {
 
     const profile = CV_DATA.CANDIDATE_PROFILE || {};
     const contact = profile.Contact || {};
-    const education = (profile.EDUCATION && profile.EDUCATION.University) || {};
-    const experience = profile.Professional_experience || {};
-    const latestJob = experience.Job_field || {};
+    const educationData = profile.EDUCATION || {};
+    const experienceData = profile.Professional_experience || {};
     const skills = CV_DATA.TECHNICAL_AND_SOFT_SKILLS || {};
 
     const fillerDataSource = CV_DATA.FOR_FILLER || {};
@@ -256,7 +270,10 @@ class FieldFiller {
     const lowercaseIdentity = elementIdentity.toLowerCase();
     let matchedValue = "";
 
-    console.log(`%c CV_FILLER: Processing field: "${elementIdentity}"`, "color: #3b82f6");
+    console.log(
+      `%c CV_FILLER: Processing field: "${elementIdentity}"`,
+      "color: #3b82f6",
+    );
 
     // Helper to join array or return string
     const formatValue = (val) => (Array.isArray(val) ? val[0] : val);
@@ -268,13 +285,121 @@ class FieldFiller {
         lowercaseIdentity.startsWith(dataKey.toLowerCase())
       ) {
         matchedValue = fillerDataSource[dataKey];
-        console.log(`   -> Direct match found in FOR_FILLER["${dataKey}"]:`, matchedValue);
-        break;
+        console.log(
+          `   -> Direct match found in FOR_FILLER["${dataKey}"]:`,
+          matchedValue,
+        );
+        return formatValue(matchedValue);
       }
     }
 
+    // --- GROUP TRACKING LOGIC ---
+    let category = null; // 'job', 'education', 'personal'
+    let fieldType = null; // 'title', 'company', 'start', etc.
+
+    // Identify Field Category and Type
+    if (
+      lowercaseIdentity.includes("uni") ||
+      lowercaseIdentity.includes("college") ||
+      lowercaseIdentity.includes("school") ||
+      lowercaseIdentity.includes("degree") ||
+      (lowercaseIdentity.includes("grad") &&
+        (lowercaseIdentity.includes("year") ||
+          lowercaseIdentity.includes("date")))
+    ) {
+      category = "education";
+      if (
+        lowercaseIdentity.includes("uni") ||
+        lowercaseIdentity.includes("college") ||
+        lowercaseIdentity.includes("school")
+      )
+        fieldType = "name";
+      else if (lowercaseIdentity.includes("degree")) fieldType = "degree";
+      else if (
+        lowercaseIdentity.includes("grad") ||
+        lowercaseIdentity.includes("end")
+      )
+        fieldType = "end";
+      else if (lowercaseIdentity.includes("start")) fieldType = "start";
+    } else if (
+      lowercaseIdentity.includes("job") ||
+      lowercaseIdentity.includes("company") ||
+      lowercaseIdentity.includes("org") ||
+      lowercaseIdentity.includes("employer") ||
+      lowercaseIdentity.includes("position") ||
+      lowercaseIdentity.includes("role") ||
+      lowercaseIdentity.includes("responsib") ||
+      lowercaseIdentity.includes("desc")
+    ) {
+      category = "job";
+      if (
+        lowercaseIdentity.includes("title") ||
+        lowercaseIdentity.includes("position") ||
+        lowercaseIdentity.includes("role")
+      )
+        fieldType = "title";
+      else if (
+        lowercaseIdentity.includes("company") ||
+        lowercaseIdentity.includes("org") ||
+        lowercaseIdentity.includes("employer")
+      )
+        fieldType = "company";
+      else if (
+        lowercaseIdentity.includes("desc") ||
+        lowercaseIdentity.includes("responsib") ||
+        lowercaseIdentity.includes("detail")
+      )
+        fieldType = "desc";
+      else if (lowercaseIdentity.includes("start")) fieldType = "start";
+      else if (lowercaseIdentity.includes("end")) fieldType = "end";
+    }
+
+    // Update indices if we hit a field type we've already filled in this group
+    if (category && fieldType) {
+      if (this.filledInGroup[category].has(fieldType)) {
+        this.groupIndices[category]++;
+        this.filledInGroup[category].clear();
+        console.log(
+          `CV_FILLER: Detected new ${category} group. Index now ${this.groupIndices[category]}`,
+        );
+      }
+      this.filledInGroup[category].add(fieldType);
+    }
+
+    // Retrieve Data based on category and index
+    if (category === "job") {
+      const jobKeys = Object.keys(experienceData).sort();
+      const jobKey = jobKeys[this.groupIndices.job] || jobKeys[0];
+      const job = experienceData[jobKey] || {};
+
+      if (fieldType === "title") matchedValue = job.Job_title;
+      else if (fieldType === "company")
+        matchedValue = job.Organization || job.Company;
+      else if (fieldType === "desc")
+        matchedValue = Array.isArray(job.job_description)
+          ? job.job_description.join("\n")
+          : job.job_description;
+      else if (fieldType === "start")
+        matchedValue = job.Start_date || fillerDataSource["start-year"];
+      else if (fieldType === "end")
+        matchedValue = job.End_date || fillerDataSource["end-year"];
+    } else if (category === "education") {
+      const eduKeys = Object.keys(educationData).sort();
+      const eduKey = eduKeys[this.groupIndices.education] || eduKeys[0];
+      const eduEntry = educationData[eduKey] || {};
+      const uni = eduEntry.University || eduEntry; // Handle nested or flat
+
+      if (fieldType === "name") matchedValue = uni.University_name || uni.Name;
+      else if (fieldType === "degree")
+        matchedValue = formatValue(uni.TypeOfDegree);
+      else if (fieldType === "end")
+        matchedValue = uni.GraduationYear || formatValue(uni.End_date);
+      else if (fieldType === "start")
+        matchedValue = formatValue(uni.Start_date);
+    }
+
+    // --- FALLBACK TO HEURISTICS (Personal info, etc.) ---
     if (!matchedValue) {
-      // Heuristic extraction logic prioritizing CANDIDATE_PROFILE
       if (lowercaseIdentity.includes("firstname"))
         matchedValue = profile.FirstName || fillerDataSource["first-name"];
       else if (lowercaseIdentity.includes("lastname"))
@@ -287,8 +412,6 @@ class FieldFiller {
           matchedValue = profile.FirstName || fillerDataSource["first-name"];
         else if (lowercaseIdentity.includes("last"))
           matchedValue = profile.LastName || fillerDataSource["last-name"];
-        else if (lowercaseIdentity.includes("prefer"))
-          matchedValue = profile.FirstName || fillerDataSource["first-name"];
         else matchedValue = profile.Name || fillerDataSource["full-name"];
       } else if (lowercaseIdentity.includes("email"))
         matchedValue = contact.Email || fillerDataSource["email"];
@@ -298,9 +421,28 @@ class FieldFiller {
         lowercaseIdentity.includes("phone") ||
         lowercaseIdentity.includes("tel") ||
         lowercaseIdentity.includes("mobile")
-      )
-        matchedValue = contact.Phone || fillerDataSource["telephone"];
-      else if (
+      ) {
+        if (
+          lowercaseIdentity.includes("code") ||
+          lowercaseIdentity.includes("country") ||
+          lowercaseIdentity.includes("dial")
+        ) {
+          matchedValue = contact.Country_Code || contact.PhoneNoCountryCode;
+        } else if (
+          lowercaseIdentity.includes("type") ||
+          lowercaseIdentity.includes("device")
+        ) {
+          matchedValue = contact.Phone_Device_Type;
+        } else {
+          // Heuristic: If there is a separate Country_Code field or the label suggests it's just the number
+          const hasCountryCodeInProfile =
+            contact.Country_Code || contact.Phone.startsWith("+");
+          matchedValue =
+            hasCountryCodeInProfile && contact.PhoneNoCountryCode
+              ? contact.PhoneNoCountryCode
+              : contact.Phone || fillerDataSource["telephone"];
+        }
+      } else if (
         lowercaseIdentity.includes("zip") ||
         lowercaseIdentity.includes("postal")
       )
@@ -322,72 +464,6 @@ class FieldFiller {
         lowercaseIdentity.includes("url")
       )
         matchedValue = contact.Web_CV || profile.url || fillerDataSource["url"];
-      else if (
-        lowercaseIdentity.includes("org") ||
-        lowercaseIdentity.includes("company") ||
-        lowercaseIdentity.includes("employer")
-      )
-        matchedValue =
-          latestJob.Organization || fillerDataSource["organization"];
-      else if (
-        lowercaseIdentity.includes("user") &&
-        lowercaseIdentity.includes("name")
-      )
-        matchedValue =
-          (contact.GitHub ? contact.GitHub.split("/").pop() : "") ||
-          fillerDataSource["username"];
-      else if (
-        lowercaseIdentity.includes("uni") ||
-        lowercaseIdentity.includes("college") ||
-        lowercaseIdentity.includes("school")
-      )
-        matchedValue =
-          education.University_name || fillerDataSource["university"];
-      else if (lowercaseIdentity.includes("degree"))
-        matchedValue =
-          formatValue(education.TypeOfDegree) || fillerDataSource["degree"];
-      else if (
-        lowercaseIdentity.includes("grad") &&
-        (lowercaseIdentity.includes("year") ||
-          lowercaseIdentity.includes("date"))
-      )
-        matchedValue =
-          education.GraduationYear || fillerDataSource["graduation-year"];
-      else if (
-        lowercaseIdentity.includes("position") ||
-        lowercaseIdentity.includes("role")
-      )
-        matchedValue =
-          latestJob.Job_title ||
-          fillerDataSource["position"] ||
-          fillerDataSource["job-title"];
-      else if (
-        lowercaseIdentity.includes("start") &&
-        (lowercaseIdentity.includes("year") ||
-          lowercaseIdentity.includes("date"))
-      )
-        matchedValue =
-          (education.Start_date ? formatValue(education.Start_date) : "") ||
-          fillerDataSource["start-year"];
-      else if (
-        lowercaseIdentity.includes("end") &&
-        (lowercaseIdentity.includes("year") ||
-          lowercaseIdentity.includes("date"))
-      )
-        matchedValue =
-          (education.End_date ? formatValue(education.End_date) : "") ||
-          fillerDataSource["end-year"];
-      else if (
-        lowercaseIdentity.includes("desc") ||
-        lowercaseIdentity.includes("detail") ||
-        lowercaseIdentity.includes("responsib")
-      )
-        matchedValue =
-          (Array.isArray(latestJob.job_description)
-            ? latestJob.job_description.join("\n")
-            : latestJob.job_description) ||
-          fillerDataSource["job-description"] ||
-          fillerDataSource["summary"];
       else if (lowercaseIdentity.includes("skill"))
         matchedValue =
           (skills.Technical_Skills_Comprehensive
@@ -402,20 +478,6 @@ class FieldFiller {
       else if (lowercaseIdentity.includes("nation"))
         matchedValue = profile.Nationality || fillerDataSource["nationality"];
       else if (
-        lowercaseIdentity.includes("job") ||
-        (lowercaseIdentity.includes("title") &&
-          (lowercaseIdentity.includes("work") ||
-            lowercaseIdentity.includes("past") ||
-            lowercaseIdentity.includes("current")))
-      ) {
-        matchedValue =
-          latestJob.Job_title ||
-          fillerDataSource["What is your current or previous job title?"] ||
-          fillerDataSource["job-title"] ||
-          fillerDataSource["position"];
-      } else if (lowercaseIdentity.includes("title"))
-        matchedValue = profile.Title || fillerDataSource["title"];
-      else if (
         lowercaseIdentity.includes("province") ||
         lowercaseIdentity.includes("state")
       )
@@ -427,32 +489,38 @@ class FieldFiller {
         matchedValue = profile.desiredPay || fillerDataSource["desiredPay"];
       else if (lowercaseIdentity.includes("sponsor"))
         matchedValue = profile.Sponsorship || fillerDataSource["Sponsorship"];
-      else if (lowercaseIdentity.includes("expertise"))
+      else if (
+        lowercaseIdentity.includes("pronoun") ||
+        lowercaseIdentity.includes("pronounce")
+      )
+        matchedValue = profile.Pronouns;
+      else if (
+        lowercaseIdentity.includes("gender") ||
+        lowercaseIdentity.includes("sex")
+      )
+        matchedValue = profile.Gender;
+      else if (
+        lowercaseIdentity.includes("us") &&
+        (lowercaseIdentity.includes("hear") ||
+          lowercaseIdentity.includes("source") ||
+          lowercaseIdentity.includes("referral"))
+      )
+        matchedValue = profile.Hear_about_us;
+      else if (
+        lowercaseIdentity.includes("currently") &&
+        (lowercaseIdentity.includes("employee") ||
+          lowercaseIdentity.includes("employed"))
+      )
         matchedValue =
-          profile.Primary_Expertise || fillerDataSource["expertise"];
+          profile.currently_employee_of ||
+          profile["Have you ever been employed by"];
+      else if (
+        lowercaseIdentity.includes("disability") ||
+        lowercaseIdentity.includes("disabled")
+      )
+        matchedValue = profile.Disability;
       else if (lowercaseIdentity.includes("location"))
-        matchedValue =
-          profile.Location ||
-          fillerDataSource["current-location"] ||
-          fillerDataSource["location"];
-      else if (lowercaseIdentity.includes("employed"))
-        matchedValue =
-          profile["Have you ever been employed by"] ||
-          fillerDataSource["Have you ever been employed by"];
-      else if (
-        lowercaseIdentity.includes("opt-in") ||
-        lowercaseIdentity.includes("receive") ||
-        lowercaseIdentity.includes("marketing")
-      )
-        matchedValue =
-          profile["Do you opt-in to receive"] ||
-          fillerDataSource["Do you opt-in to receive"];
-      else if (
-        lowercaseIdentity.includes("cv") ||
-        lowercaseIdentity.includes("resume")
-      )
-        matchedValue =
-          formatValue(contact.cv_link) || fillerDataSource["cv_link"];
+        matchedValue = profile.Location || fillerDataSource["current-location"];
 
       if (matchedValue) {
         console.log(`   -> Heuristic match found:`, matchedValue);
@@ -498,7 +566,9 @@ class FieldFiller {
         const generatedValue = this.generateCV_Data(targetElement);
         if (generatedValue) {
           const lowVal = generatedValue.toString().toLowerCase();
-          console.log(`CV_FILLER: Setting checkbox "${this.getElementName(targetElement)}" to ${lowVal}`);
+          console.log(
+            `CV_FILLER: Setting checkbox "${this.getElementName(targetElement)}" to ${lowVal}`,
+          );
           if (
             lowVal === "yes" ||
             lowVal === "true" ||
@@ -522,9 +592,14 @@ class FieldFiller {
           normalizedName.includes("resume") ||
           normalizedName.includes("attach")
         ) {
-          const profile = (typeof CV_DATA !== "undefined" && CV_DATA.CANDIDATE_PROFILE) || {};
+          const profile =
+            (typeof CV_DATA !== "undefined" && CV_DATA.CANDIDATE_PROFILE) || {};
           const contact = profile.Contact || {};
-          const cvPath = (Array.isArray(contact.cv_link) ? contact.cv_link[1] : "") || (typeof CV_DATA !== "undefined" && CV_DATA.FOR_FILLER ? CV_DATA.FOR_FILLER.cv_path : "");
+          const cvPath =
+            (Array.isArray(contact.cv_link) ? contact.cv_link[1] : "") ||
+            (typeof CV_DATA !== "undefined" && CV_DATA.FOR_FILLER
+              ? CV_DATA.FOR_FILLER.cv_path
+              : "");
           if (cvPath)
             console.log(
               "%c CV_FILLER: Detected upload field. Path: " + cvPath,
@@ -535,9 +610,16 @@ class FieldFiller {
         if (this.isAnyMatch(inputName, this.options.confirmFields)) {
           targetElement.value = this.previousPassword;
         } else {
-          const profile = (typeof CV_DATA !== "undefined" && CV_DATA.CANDIDATE_PROFILE) || {};
+          const profile =
+            (typeof CV_DATA !== "undefined" && CV_DATA.CANDIDATE_PROFILE) || {};
           const contact = profile.Contact || {};
-          this.previousPassword = contact.pwd || contact.default_password || (typeof CV_DATA !== "undefined" && CV_DATA.FOR_FILLER ? CV_DATA.FOR_FILLER.password : "") || "";
+          this.previousPassword =
+            contact.pwd ||
+            contact.default_password ||
+            (typeof CV_DATA !== "undefined" && CV_DATA.FOR_FILLER
+              ? CV_DATA.FOR_FILLER.password
+              : "") ||
+            "";
           targetElement.value = this.previousPassword;
         }
         console.log(`CV_FILLER: Filled password field.`);
@@ -550,7 +632,10 @@ class FieldFiller {
       } else {
         const generatedValue = this.generateCV_Data(targetElement);
         if (generatedValue) {
-          console.log(`CV_FILLER: Filling input "${this.getElementName(targetElement)}" with:`, generatedValue);
+          console.log(
+            `CV_FILLER: Filling input "${this.getElementName(targetElement)}" with:`,
+            generatedValue,
+          );
           this.previousValue = generatedValue;
           targetElement.value = generatedValue;
         }
@@ -611,10 +696,14 @@ class FieldFiller {
         }
 
         if (bestMatchIndex !== -1) {
-          console.log(`CV_FILLER: Selecting option index ${bestMatchIndex} for "${this.getElementName(targetElement)}"`);
+          console.log(
+            `CV_FILLER: Selecting option index ${bestMatchIndex} for "${this.getElementName(targetElement)}"`,
+          );
           targetElement.selectedIndex = bestMatchIndex;
         } else {
-          console.warn(`CV_FILLER: No matching option found for select "${this.getElementName(targetElement)}" with value "${generatedValue}"`);
+          console.warn(
+            `CV_FILLER: No matching option found for select "${this.getElementName(targetElement)}" with value "${generatedValue}"`,
+          );
         }
       }
     }
@@ -644,6 +733,7 @@ class FillerManager {
       console.warn("CV_FILLER: Filler is disabled for this domain/profile.");
       return;
     }
+    this.elementFiller.resetGroupTracking();
     console.log("CV_FILLER: Starting to fill all elements in:", container);
     const inputElements = container.querySelectorAll(
       "input:not(:disabled):not([readonly])",
@@ -658,7 +748,9 @@ class FillerManager {
       "[contenteditable='true']",
     );
 
-    console.log(`CV_FILLER: Found ${inputElements.length} inputs, ${textareaElements.length} textareas, ${selectElements.length} selects, ${contentEditableElements.length} editables.`);
+    console.log(
+      `CV_FILLER: Found ${inputElements.length} inputs, ${textareaElements.length} textareas, ${selectElements.length} selects, ${contentEditableElements.length} editables.`,
+    );
 
     inputElements.forEach((input) => this.elementFiller.fillElement(input));
     textareaElements.forEach((textarea) =>
@@ -722,7 +814,10 @@ function setupExtension(extensionOptions, isProVersion = false) {
   let isExtensionEnabled = true;
   const currentUrl = window.location.href;
 
-  console.log("CV_FILLER: Setting up extension with options:", extensionOptions);
+  console.log(
+    "CV_FILLER: Setting up extension with options:",
+    extensionOptions,
+  );
 
   if (
     typeof chrome !== "undefined" &&
@@ -815,7 +910,9 @@ if (
     else {
       // Fallback if no options returned
       window.filler = new FillerManager();
-      console.log("CV_FILLER: Initialized with default options (no response from background).");
+      console.log(
+        "CV_FILLER: Initialized with default options (no response from background).",
+      );
     }
   });
 
