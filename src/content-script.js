@@ -239,130 +239,168 @@ class FieldFiller {
    * Matches element identity against CV_DATA to find the correct value.
    */
   generateCV_Data(targetElement) {
-    if (typeof CV_DATA === "undefined" || !CV_DATA.FOR_FILLER) return "";
+    if (typeof CV_DATA === "undefined") {
+      console.error("CV_FILLER: CV_DATA is undefined in the current context.");
+      return "";
+    }
 
-    const fillerDataSource = CV_DATA.FOR_FILLER;
+    const profile = CV_DATA.CANDIDATE_PROFILE || {};
+    const contact = profile.Contact || {};
+    const education = (profile.EDUCATION && profile.EDUCATION.University) || {};
+    const experience = profile.Professional_experience || {};
+    const latestJob = experience.Job_field || {};
+    const skills = CV_DATA.TECHNICAL_AND_SOFT_SKILLS || {};
+
+    const fillerDataSource = CV_DATA.FOR_FILLER || {};
     const elementIdentity = this.getElementName(targetElement);
     const lowercaseIdentity = elementIdentity.toLowerCase();
     let matchedValue = "";
 
-    // Direct match check in keys
+    console.log(`%c CV_FILLER: Processing field: "${elementIdentity}"`, "color: #3b82f6");
+
+    // Helper to join array or return string
+    const formatValue = (val) => (Array.isArray(val) ? val[0] : val);
+
+    // Direct match check in FOR_FILLER
     for (const dataKey in fillerDataSource) {
       if (
         elementIdentity.startsWith(dataKey) ||
         lowercaseIdentity.startsWith(dataKey.toLowerCase())
       ) {
         matchedValue = fillerDataSource[dataKey];
+        console.log(`   -> Direct match found in FOR_FILLER["${dataKey}"]:`, matchedValue);
         break;
       }
     }
 
     if (!matchedValue) {
-      // Heuristic extraction logic
+      // Heuristic extraction logic prioritizing CANDIDATE_PROFILE
       if (lowercaseIdentity.includes("firstname"))
-        matchedValue = fillerDataSource["first-name"] || "";
+        matchedValue = profile.FirstName || fillerDataSource["first-name"];
       else if (lowercaseIdentity.includes("lastname"))
-        matchedValue = fillerDataSource["last-name"] || "";
+        matchedValue = profile.LastName || fillerDataSource["last-name"];
       else if (
         lowercaseIdentity.includes("fullname") ||
         lowercaseIdentity.includes("name")
       ) {
         if (lowercaseIdentity.includes("first"))
-          matchedValue = fillerDataSource["first-name"] || "";
+          matchedValue = profile.FirstName || fillerDataSource["first-name"];
         else if (lowercaseIdentity.includes("last"))
-          matchedValue = fillerDataSource["last-name"] || "";
+          matchedValue = profile.LastName || fillerDataSource["last-name"];
         else if (lowercaseIdentity.includes("prefer"))
-          matchedValue = fillerDataSource["first-name"] || "";
-        else matchedValue = fillerDataSource["full-name"] || "";
+          matchedValue = profile.FirstName || fillerDataSource["first-name"];
+        else matchedValue = profile.Name || fillerDataSource["full-name"];
       } else if (lowercaseIdentity.includes("email"))
-        matchedValue = fillerDataSource["email"] || "";
+        matchedValue = contact.Email || fillerDataSource["email"];
       else if (lowercaseIdentity.includes("city"))
-        matchedValue = fillerDataSource["city"] || "";
+        matchedValue = profile.City || fillerDataSource["city"];
       else if (
         lowercaseIdentity.includes("phone") ||
         lowercaseIdentity.includes("tel") ||
         lowercaseIdentity.includes("mobile")
       )
-        matchedValue = fillerDataSource["telephone"] || "";
+        matchedValue = contact.Phone || fillerDataSource["telephone"];
       else if (
         lowercaseIdentity.includes("zip") ||
         lowercaseIdentity.includes("postal")
       )
-        matchedValue = fillerDataSource["zip"] || "";
+        matchedValue =
+          profile.PostalCode_Eircode_Address || fillerDataSource["zip"];
       else if (lowercaseIdentity.includes("country"))
-        matchedValue = fillerDataSource["country"] || "";
+        matchedValue = profile.Location || fillerDataSource["country"];
       else if (lowercaseIdentity.includes("address"))
-        matchedValue = fillerDataSource["address"] || "";
+        matchedValue =
+          profile.PostalCode_Eircode_Address && profile.City
+            ? `${profile.PostalCode_Eircode_Address}, ${profile.City}, ${profile.Location}`
+            : fillerDataSource["address"];
       else if (lowercaseIdentity.includes("github"))
-        matchedValue = fillerDataSource["github"] || "";
+        matchedValue = contact.GitHub || fillerDataSource["github"];
       else if (lowercaseIdentity.includes("linkedin"))
-        matchedValue = fillerDataSource["linkedin"] || "";
+        matchedValue = contact.LinkedIn || fillerDataSource["linkedin"];
       else if (
         lowercaseIdentity.includes("website") ||
         lowercaseIdentity.includes("url")
       )
-        matchedValue = fillerDataSource["url"] || "";
+        matchedValue = contact.Web_CV || profile.url || fillerDataSource["url"];
       else if (
         lowercaseIdentity.includes("org") ||
         lowercaseIdentity.includes("company") ||
         lowercaseIdentity.includes("employer")
       )
-        matchedValue = fillerDataSource["organization"] || "";
+        matchedValue =
+          latestJob.Organization || fillerDataSource["organization"];
       else if (
         lowercaseIdentity.includes("user") &&
         lowercaseIdentity.includes("name")
       )
-        matchedValue = fillerDataSource["username"] || "";
+        matchedValue =
+          (contact.GitHub ? contact.GitHub.split("/").pop() : "") ||
+          fillerDataSource["username"];
       else if (
         lowercaseIdentity.includes("uni") ||
         lowercaseIdentity.includes("college") ||
         lowercaseIdentity.includes("school")
       )
-        matchedValue = fillerDataSource["university"] || "";
+        matchedValue =
+          education.University_name || fillerDataSource["university"];
       else if (lowercaseIdentity.includes("degree"))
-        matchedValue = fillerDataSource["degree"] || "";
+        matchedValue =
+          formatValue(education.TypeOfDegree) || fillerDataSource["degree"];
       else if (
         lowercaseIdentity.includes("grad") &&
-        lowercaseIdentity.includes("year")
+        (lowercaseIdentity.includes("year") ||
+          lowercaseIdentity.includes("date"))
       )
-        matchedValue = fillerDataSource["graduation-year"] || "";
+        matchedValue =
+          education.GraduationYear || fillerDataSource["graduation-year"];
       else if (
         lowercaseIdentity.includes("position") ||
         lowercaseIdentity.includes("role")
       )
         matchedValue =
-          fillerDataSource["position"] || fillerDataSource["job-title"] || "";
+          latestJob.Job_title ||
+          fillerDataSource["position"] ||
+          fillerDataSource["job-title"];
       else if (
         lowercaseIdentity.includes("start") &&
         (lowercaseIdentity.includes("year") ||
           lowercaseIdentity.includes("date"))
       )
-        matchedValue = fillerDataSource["start-year"] || "";
+        matchedValue =
+          (education.Start_date ? formatValue(education.Start_date) : "") ||
+          fillerDataSource["start-year"];
       else if (
         lowercaseIdentity.includes("end") &&
         (lowercaseIdentity.includes("year") ||
           lowercaseIdentity.includes("date"))
       )
-        matchedValue = fillerDataSource["end-year"] || "";
+        matchedValue =
+          (education.End_date ? formatValue(education.End_date) : "") ||
+          fillerDataSource["end-year"];
       else if (
         lowercaseIdentity.includes("desc") ||
         lowercaseIdentity.includes("detail") ||
         lowercaseIdentity.includes("responsib")
       )
         matchedValue =
+          (Array.isArray(latestJob.job_description)
+            ? latestJob.job_description.join("\n")
+            : latestJob.job_description) ||
           fillerDataSource["job-description"] ||
-          fillerDataSource["summary"] ||
-          "";
+          fillerDataSource["summary"];
       else if (lowercaseIdentity.includes("skill"))
-        matchedValue = fillerDataSource["skills"] || "";
+        matchedValue =
+          (skills.Technical_Skills_Comprehensive
+            ? skills.Technical_Skills_Comprehensive.join(", ")
+            : "") || fillerDataSource["skills"];
       else if (
         lowercaseIdentity.includes("summary") ||
         lowercaseIdentity.includes("bio") ||
         lowercaseIdentity.includes("about")
       )
-        matchedValue = fillerDataSource["summary"] || "";
+        matchedValue = profile.Primary_Expertise || fillerDataSource["summary"];
       else if (lowercaseIdentity.includes("nation"))
-        matchedValue = fillerDataSource["nationality"] || "";
+        matchedValue = profile.Nationality || fillerDataSource["nationality"];
       else if (
         lowercaseIdentity.includes("job") ||
         (lowercaseIdentity.includes("title") &&
@@ -371,55 +409,69 @@ class FieldFiller {
             lowercaseIdentity.includes("current")))
       ) {
         matchedValue =
+          latestJob.Job_title ||
           fillerDataSource["What is your current or previous job title?"] ||
           fillerDataSource["job-title"] ||
-          fillerDataSource["position"] ||
-          "";
+          fillerDataSource["position"];
       } else if (lowercaseIdentity.includes("title"))
-        matchedValue = fillerDataSource["title"] || "";
+        matchedValue = profile.Title || fillerDataSource["title"];
       else if (
         lowercaseIdentity.includes("province") ||
         lowercaseIdentity.includes("state")
       )
-        matchedValue = fillerDataSource["province"] || "";
+        matchedValue = profile.County || fillerDataSource["province"];
       else if (
         lowercaseIdentity.includes("pay") ||
         lowercaseIdentity.includes("salary")
       )
-        matchedValue = fillerDataSource["desiredPay"] || "";
+        matchedValue = profile.desiredPay || fillerDataSource["desiredPay"];
       else if (lowercaseIdentity.includes("sponsor"))
-        matchedValue = fillerDataSource["Sponsorship"] || "";
+        matchedValue = profile.Sponsorship || fillerDataSource["Sponsorship"];
       else if (lowercaseIdentity.includes("expertise"))
-        matchedValue = fillerDataSource["expertise"] || "";
+        matchedValue =
+          profile.Primary_Expertise || fillerDataSource["expertise"];
       else if (lowercaseIdentity.includes("location"))
         matchedValue =
+          profile.Location ||
           fillerDataSource["current-location"] ||
-          fillerDataSource["location"] ||
-          "";
+          fillerDataSource["location"];
       else if (lowercaseIdentity.includes("employed"))
-        matchedValue = fillerDataSource["Have you ever been employed by"] || "";
+        matchedValue =
+          profile["Have you ever been employed by"] ||
+          fillerDataSource["Have you ever been employed by"];
       else if (
         lowercaseIdentity.includes("opt-in") ||
         lowercaseIdentity.includes("receive") ||
         lowercaseIdentity.includes("marketing")
       )
-        matchedValue = fillerDataSource["Do you opt-in to receive"] || "";
+        matchedValue =
+          profile["Do you opt-in to receive"] ||
+          fillerDataSource["Do you opt-in to receive"];
       else if (
         lowercaseIdentity.includes("cv") ||
         lowercaseIdentity.includes("resume")
       )
-        matchedValue = fillerDataSource["cv_link"] || "";
+        matchedValue =
+          formatValue(contact.cv_link) || fillerDataSource["cv_link"];
+
+      if (matchedValue) {
+        console.log(`   -> Heuristic match found:`, matchedValue);
+      } else {
+        console.log(`   -> No match found for "${elementIdentity}"`);
+      }
     }
 
-    if (Array.isArray(matchedValue)) return matchedValue[0] || "";
-    return matchedValue;
+    return formatValue(matchedValue) || "";
   }
 
   /**
    * Sets the value of a specific element based on matched data.
    */
   fillElement(targetElement) {
-    if (this.shouldIgnoreElement(targetElement)) return;
+    if (this.shouldIgnoreElement(targetElement)) {
+      console.log(`CV_FILLER: Skipping ignored/hidden element:`, targetElement);
+      return;
+    }
 
     const inputType = (targetElement.type || "").toLowerCase();
     const tagName = targetElement.tagName.toLowerCase();
@@ -438,6 +490,7 @@ class FieldFiller {
             normalizeText(elementValue) === normalizedGenerated ||
             normalizeText(elementIdentity).includes(normalizedGenerated)
           ) {
+            console.log(`CV_FILLER: Checking radio button: ${elementIdentity}`);
             targetElement.checked = true;
           }
         }
@@ -445,6 +498,7 @@ class FieldFiller {
         const generatedValue = this.generateCV_Data(targetElement);
         if (generatedValue) {
           const lowVal = generatedValue.toString().toLowerCase();
+          console.log(`CV_FILLER: Setting checkbox "${this.getElementName(targetElement)}" to ${lowVal}`);
           if (
             lowVal === "yes" ||
             lowVal === "true" ||
@@ -468,7 +522,9 @@ class FieldFiller {
           normalizedName.includes("resume") ||
           normalizedName.includes("attach")
         ) {
-          const cvPath = CV_DATA.FOR_FILLER.cv_path;
+          const profile = (typeof CV_DATA !== "undefined" && CV_DATA.CANDIDATE_PROFILE) || {};
+          const contact = profile.Contact || {};
+          const cvPath = (Array.isArray(contact.cv_link) ? contact.cv_link[1] : "") || (typeof CV_DATA !== "undefined" && CV_DATA.FOR_FILLER ? CV_DATA.FOR_FILLER.cv_path : "");
           if (cvPath)
             console.log(
               "%c CV_FILLER: Detected upload field. Path: " + cvPath,
@@ -479,24 +535,32 @@ class FieldFiller {
         if (this.isAnyMatch(inputName, this.options.confirmFields)) {
           targetElement.value = this.previousPassword;
         } else {
-          this.previousPassword = CV_DATA.FOR_FILLER.password || "";
+          const profile = (typeof CV_DATA !== "undefined" && CV_DATA.CANDIDATE_PROFILE) || {};
+          const contact = profile.Contact || {};
+          this.previousPassword = contact.pwd || contact.default_password || (typeof CV_DATA !== "undefined" && CV_DATA.FOR_FILLER ? CV_DATA.FOR_FILLER.password : "") || "";
           targetElement.value = this.previousPassword;
         }
+        console.log(`CV_FILLER: Filled password field.`);
       } else if (
         inputType === "email" &&
         this.isAnyMatch(inputName, this.options.confirmFields)
       ) {
         targetElement.value = this.previousValue;
+        console.log(`CV_FILLER: Filled email confirmation field.`);
       } else {
         const generatedValue = this.generateCV_Data(targetElement);
         if (generatedValue) {
+          console.log(`CV_FILLER: Filling input "${this.getElementName(targetElement)}" with:`, generatedValue);
           this.previousValue = generatedValue;
           targetElement.value = generatedValue;
         }
       }
     } else if (tagName === "textarea") {
       const generatedValue = this.generateCV_Data(targetElement);
-      if (generatedValue) targetElement.value = generatedValue;
+      if (generatedValue) {
+        console.log(`CV_FILLER: Filling textarea with:`, generatedValue);
+        targetElement.value = generatedValue;
+      }
     } else if (tagName === "select") {
       const generatedValue = this.generateCV_Data(targetElement);
       if (generatedValue) {
@@ -547,7 +611,10 @@ class FieldFiller {
         }
 
         if (bestMatchIndex !== -1) {
+          console.log(`CV_FILLER: Selecting option index ${bestMatchIndex} for "${this.getElementName(targetElement)}"`);
           targetElement.selectedIndex = bestMatchIndex;
+        } else {
+          console.warn(`CV_FILLER: No matching option found for select "${this.getElementName(targetElement)}" with value "${generatedValue}"`);
         }
       }
     }
@@ -573,7 +640,11 @@ class FillerManager {
    * Scans a container and fills all supported inputs.
    */
   fillAllElements(container = document) {
-    if (!this.isEnabled) return;
+    if (!this.isEnabled) {
+      console.warn("CV_FILLER: Filler is disabled for this domain/profile.");
+      return;
+    }
+    console.log("CV_FILLER: Starting to fill all elements in:", container);
     const inputElements = container.querySelectorAll(
       "input:not(:disabled):not([readonly])",
     );
@@ -586,6 +657,8 @@ class FillerManager {
     const contentEditableElements = container.querySelectorAll(
       "[contenteditable='true']",
     );
+
+    console.log(`CV_FILLER: Found ${inputElements.length} inputs, ${textareaElements.length} textareas, ${selectElements.length} selects, ${contentEditableElements.length} editables.`);
 
     inputElements.forEach((input) => this.elementFiller.fillElement(input));
     textareaElements.forEach((textarea) =>
@@ -639,6 +712,8 @@ class FillerManager {
 
 // --- INITIALIZATION ---
 
+console.log("CV_FILLER: Content script loaded and initializing...");
+
 /**
  * Connects the manager to extension options and handles URL matching.
  */
@@ -646,6 +721,8 @@ function setupExtension(extensionOptions, isProVersion = false) {
   let matchedProfileIndex = -1;
   let isExtensionEnabled = true;
   const currentUrl = window.location.href;
+
+  console.log("CV_FILLER: Setting up extension with options:", extensionOptions);
 
   if (
     typeof chrome !== "undefined" &&
@@ -706,6 +783,7 @@ function setupExtension(extensionOptions, isProVersion = false) {
     matchedProfileIndex,
     isExtensionEnabled,
   );
+  console.log("CV_FILLER: window.filler initialized and ready.");
 }
 
 /**
@@ -734,6 +812,11 @@ if (
   chrome.runtime.sendMessage({ type: "getOptions" }, (optionsResponse) => {
     if (optionsResponse && optionsResponse.options)
       setupExtension(optionsResponse.options, optionsResponse.isProEdition);
+    else {
+      // Fallback if no options returned
+      window.filler = new FillerManager();
+      console.log("CV_FILLER: Initialized with default options (no response from background).");
+    }
   });
 
   chrome.runtime.onMessage.addListener(handleMessage);

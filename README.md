@@ -1,4 +1,4 @@
-* Form Filler
+# Form Filler
 
 A form filler that fills all form inputs (dropdowns, textboxes, textareas, radio buttons, etc.)
 

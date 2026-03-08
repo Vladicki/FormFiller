@@ -1,6 +1,6 @@
 {
     "manifest_version": 3,
-    "name": "Applier",
+    "name": "FormFiller",
     "version": "1.0",
     "description": "A form filler that fills all inputs on a page with data.",
     "action": {
