@@ -140,12 +140,29 @@ class FieldFiller {
 
   /**
    * Triggers necessary events to let the page know an input has changed.
+   * Now async to allow for small delays between events if needed.
    */
-  fireEvents(targetElement) {
-    ["input", "click", "change", "blur"].forEach((eventName) => {
-      const event = new Event(eventName, { bubbles: true, cancelable: true });
-      targetElement.dispatchEvent(event);
-    });
+  async fireEvents(targetElement) {
+    const type = (targetElement.type || "").toLowerCase();
+    const tagName = targetElement.tagName.toLowerCase();
+
+    // 1. Focus the element first
+    targetElement.focus();
+
+    // 2. Dispatch 'input' event - essential for React/modern frameworks
+    targetElement.dispatchEvent(new Event("input", { bubbles: true }));
+
+    // 3. Dispatch 'click' ONLY for toggles (radio/checkbox)
+    // For text inputs, clicking during programmatic fill can trigger unexpected site logic or reloads.
+    if (type === "radio" || type === "checkbox") {
+      targetElement.dispatchEvent(new Event("click", { bubbles: true }));
+    }
+
+    // 4. Dispatch 'change' and 'blur' after a tiny delay
+    // This allows the site's internal state to settle before validation triggers.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    targetElement.dispatchEvent(new Event("change", { bubbles: true }));
+    targetElement.dispatchEvent(new Event("blur", { bubbles: true }));
   }
 
   /**
@@ -158,8 +175,9 @@ class FieldFiller {
       patternsIndex < patternsList.length;
       patternsIndex += 1
     ) {
-      if (new RegExp(patternsList[patternsIndex], "i").test(textToMatch))
-        return true;
+      const pattern = patternsList[patternsIndex];
+      if (!pattern) continue;
+      if (new RegExp(pattern, "i").test(textToMatch)) return true;
     }
     return false;
   }
@@ -168,9 +186,13 @@ class FieldFiller {
    * Checks if an element is visible on the page.
    */
   isElementVisible(elementToCheck) {
-    return !(
-      (!elementToCheck.offsetHeight && !elementToCheck.offsetWidth) ||
-      window.getComputedStyle(elementToCheck).visibility === "hidden"
+    if (!elementToCheck) return false;
+    const style = window.getComputedStyle(elementToCheck);
+    return !!(
+      elementToCheck.offsetWidth ||
+      elementToCheck.offsetHeight ||
+      elementToCheck.getClientRects().length ||
+      (style.visibility !== "hidden" && style.display !== "none")
     );
   }
 
@@ -179,17 +201,72 @@ class FieldFiller {
    */
   shouldIgnoreElement(elementToCheck) {
     const inputType = (elementToCheck.type || "").toLowerCase();
-    if (
-      ["button", "submit", "reset", "hidden", "image"].indexOf(inputType) >
-        -1 ||
-      (this.options.ignoreHiddenFields &&
-        !this.isElementVisible(elementToCheck))
-    )
+    
+    // Ignore common non-input types
+    if (["button", "submit", "reset", "hidden", "image", "search"].indexOf(inputType) > -1)
       return true;
 
-    const elementIdentifier = this.getElementName(elementToCheck);
+    const elementIdentifier = this.getElementName(elementToCheck).toLowerCase();
+    const id = (elementToCheck.id || "").toLowerCase();
+    const name = (elementToCheck.name || "").toLowerCase();
+    const componentKey = (elementToCheck.getAttribute("componentkey") || "").toLowerCase();
+    const placeholder = (elementToCheck.getAttribute("placeholder") || "").toLowerCase();
+
+    const isJobBoard = 
+      window.location.host.includes("greenhouse.io") || 
+      window.location.host.includes("lever.co") || 
+      !!document.getElementById("grnhse_app");
+
+    // Ignore elements inside header or footer tags, UNLESS it's a job board
+    // (Job boards often use header tags for form sections)
+    if (!isJobBoard && (elementToCheck.closest("header") || elementToCheck.closest("footer"))) {
+      return true;
+    }
+
+    // Ignore LinkedIn Job Alert toggles/sections
+    if (elementToCheck.closest("[componentkey*='JobDetails_JobAlertToggle']")) {
+      return true;
+    }
+
+    // Ignore language selectors, search fields, and navigation elements
+    if (
+      elementIdentifier.includes("language") || 
+      id.includes("language") || 
+      name.includes("language") ||
+      elementIdentifier.includes("search") ||
+      id.includes("search") ||
+      name.includes("search") ||
+      componentKey.includes("search") ||
+      placeholder.includes("search") ||
+      elementIdentifier.includes("nav")
+    ) {
+      return true;
+    }
+
+    // Ignore elements that are explicitly hidden from users
+    if (
+      elementToCheck.getAttribute("aria-hidden") === "true" ||
+      elementToCheck.style.display === "none" ||
+      elementToCheck.style.visibility === "hidden"
+    ) {
+      return true;
+    }
+
+    // If a modal is open, ignore elements that are outside the modal
+    // BUT only if we aren't already on a job board iframe
+    if (!isJobBoard) {
+      const activeModal = document.querySelector(".jobs-easy-apply-content, .artdeco-modal, [role='dialog']");
+      if (activeModal && !activeModal.contains(elementToCheck)) {
+        return true;
+      }
+    }
+
+    if (this.options.ignoreHiddenFields && !this.isElementVisible(elementToCheck))
+      return true;
+
     if (this.isAnyMatch(elementIdentifier, this.options.ignoredFields))
       return true;
+      
     return false;
   }
 
@@ -200,29 +277,62 @@ class FieldFiller {
     let combinedIdentifier = "";
     const settings = this.options.fieldMatchSettings;
 
-    if (settings.matchName)
+    if (settings.matchName && elementToIdentify.name)
       combinedIdentifier += ` ${normalizeText(elementToIdentify.name)}`;
-    if (settings.matchId)
+    if (settings.matchId && elementToIdentify.id)
       combinedIdentifier += ` ${normalizeText(elementToIdentify.id)}`;
-    if (settings.matchClass)
+    if (settings.matchClass && elementToIdentify.className)
       combinedIdentifier += ` ${normalizeText(elementToIdentify.className)}`;
     if (settings.matchPlaceholder)
       combinedIdentifier += ` ${normalizeText(elementToIdentify.getAttribute("placeholder") || "")}`;
 
-    if (settings.matchLabel && elementToIdentify.id) {
-      try {
-        const escapedId = cssesc(elementToIdentify.id, { isIdentifier: true });
-        const associatedLabels = document.querySelectorAll(
-          `label[for='${escapedId}']`,
-        );
-        for (
-          let labelIndex = 0;
-          labelIndex < associatedLabels.length;
-          labelIndex += 1
-        ) {
-          combinedIdentifier += ` ${normalizeText(associatedLabels[labelIndex].innerHTML)}`;
+    if (settings.matchLabel) {
+      if (elementToIdentify.id) {
+        try {
+          const escapedId = cssesc(elementToIdentify.id, { isIdentifier: true });
+          const associatedLabels = document.querySelectorAll(
+            `label[for='${escapedId}']`,
+          );
+          for (
+            let labelIndex = 0;
+            labelIndex < associatedLabels.length;
+            labelIndex += 1
+          ) {
+            combinedIdentifier += ` ${normalizeText(associatedLabels[labelIndex].innerText || associatedLabels[labelIndex].innerHTML)}`;
+          }
+        } catch (error) {}
+      }
+      
+      // Also check if the element is nested inside a label or a div with label-like text
+      const parentLabel = elementToIdentify.closest("label");
+      if (parentLabel) {
+        combinedIdentifier += ` ${normalizeText(parentLabel.innerText || parentLabel.innerHTML)}`;
+      }
+      
+      const parentDiv = elementToIdentify.closest(".field, .input-container, [class*='form-group']");
+      if (parentDiv) {
+        // Only take the first few words to avoid grabbing the whole form
+        const divText = (parentDiv.innerText || "").split("\n")[0];
+        combinedIdentifier += ` ${normalizeText(divText)}`;
+      }
+
+      // If it's a checkbox/radio, check the next sibling for text (common pattern)
+      if (elementToIdentify.type === "checkbox" || elementToIdentify.type === "radio") {
+        const nextSibling = elementToIdentify.nextSibling;
+        if (nextSibling && nextSibling.nodeType === 3) { // Text node
+          combinedIdentifier += ` ${normalizeText(nextSibling.textContent)}`;
         }
-      } catch (error) {}
+        const nextElementSibling = elementToIdentify.nextElementSibling;
+        if (nextElementSibling && (nextElementSibling.tagName === "SPAN" || nextElementSibling.tagName === "LABEL")) {
+          combinedIdentifier += ` ${normalizeText(nextElementSibling.innerText)}`;
+        }
+      }
+
+      // Also check previous sibling label (common for some Greenhouse layouts)
+      const prevSibling = elementToIdentify.previousElementSibling;
+      if (prevSibling && (prevSibling.tagName === "LABEL" || prevSibling.tagName === "SPAN")) {
+        combinedIdentifier += ` ${normalizeText(prevSibling.innerText)}`;
+      }
     }
 
     if (settings.matchAriaLabel)
@@ -234,15 +344,14 @@ class FieldFiller {
       ).split(" ");
       for (
         let ariaIdIndex = 0;
-        ariaIdIndex < ariaLabelIds.length;
-        ariaIdIndex += 1
+        ariaIdIndex < ariaLabelIds.length; ariaIdIndex += 1
       ) {
         if (ariaLabelIds[ariaIdIndex]) {
           const labelledByElement = document.getElementById(
             ariaLabelIds[ariaIdIndex],
           );
           if (labelledByElement) {
-            combinedIdentifier += ` ${normalizeText(labelledByElement.innerHTML || "")}`;
+            combinedIdentifier += ` ${normalizeText(labelledByElement.innerText || labelledByElement.innerHTML || "")}`;
           }
         }
       }
@@ -265,7 +374,7 @@ class FieldFiller {
     const experienceData = profile.Professional_experience || {};
     const skills = CV_DATA.TECHNICAL_AND_SOFT_SKILLS || {};
 
-    const fillerDataSource = CV_DATA.FOR_FILLER || {};
+    const fillerDataSource = profile;
     const elementIdentity = this.getElementName(targetElement);
     const lowercaseIdentity = elementIdentity.toLowerCase();
     let matchedValue = "";
@@ -278,15 +387,85 @@ class FieldFiller {
     // Helper to join array or return string
     const formatValue = (val) => (Array.isArray(val) ? val[0] : val);
 
-    // Direct match check in FOR_FILLER
+    // --- SPECIAL CASE: YEARS OF EXPERIENCE ---
+    // Specifically handle questions like "How many years of experience do you have with Go?"
+    if (
+      (lowercaseIdentity.includes("year") || lowercaseIdentity.includes("experience")) &&
+      !lowercaseIdentity.includes("start") &&
+      !lowercaseIdentity.includes("end") &&
+      !lowercaseIdentity.includes("date")
+    ) {
+      const skillsList = skills.Technical_Skills_Comprehensive || [];
+      for (const skillEntry of skillsList) {
+        if (typeof skillEntry === "string" && skillEntry.includes(":")) {
+          const parts = skillEntry.split(":");
+          const skillName = parts[0].trim().toLowerCase();
+          const skillExp = parts[1].trim();
+
+          // Check if the current field identity mentions this specific skill
+          if (skillName && lowercaseIdentity.includes(skillName)) {
+            console.log(
+              `   -> Found specific skill experience for "${skillName}": ${skillExp}`,
+            );
+            return formatValue(skillExp);
+          }
+        }
+      }
+
+      // If no specific skill match, check for general experience in CANDIDATE_PROFILE
+      const generalExp =
+        profile["experience"] ||
+        profile["years-experience"] ||
+        profile["years"];
+      if (generalExp) {
+        console.log(`   -> Using general experience fallback:`, generalExp);
+        return formatValue(generalExp);
+      }
+    }
+
+    // --- SPECIAL CASE: RELOCATION ---
+    if (lowercaseIdentity.includes("relocate") || lowercaseIdentity.includes("relocation")) {
+      const userCity = profile.City || fillerDataSource["city"] || "";
+      const normalizedUserCity = normalizeText(userCity);
+      
+      if (normalizedUserCity && lowercaseIdentity.includes(normalizedUserCity)) {
+        console.log(`   -> Relocation match found for city "${userCity}": Yes`);
+        return "Yes";
+      } else {
+        console.log(`   -> Relocation city mismatch or generic question: No`);
+        return "No";
+      }
+    }
+
+    // --- SPECIAL CASE: CONSENT / TERMS ---
+    if (
+      targetElement.type === "checkbox" &&
+      (lowercaseIdentity.includes("terms") ||
+        lowercaseIdentity.includes("consent") ||
+        lowercaseIdentity.includes("agree") ||
+        lowercaseIdentity.includes("policy") ||
+        lowercaseIdentity.includes("acknowledge") ||
+        lowercaseIdentity.includes("read") ||
+        lowercaseIdentity.includes("underst") ||
+        lowercaseIdentity.includes("condition"))
+    ) {
+      console.log(`   -> Consent/Terms match found for checkbox: Yes`);
+      return "Yes";
+    }
+
+    // Direct match check in FOR_FILLER - Use word boundary or exact match if possible
+    // This prevents "e" matching "email" or "ember123"
     for (const dataKey in fillerDataSource) {
-      if (
-        elementIdentity.startsWith(dataKey) ||
-        lowercaseIdentity.startsWith(dataKey.toLowerCase())
-      ) {
-        matchedValue = fillerDataSource[dataKey];
+      const value = fillerDataSource[dataKey];
+      if (typeof value === "object" && !Array.isArray(value)) continue;
+
+      const normalizedKey = dataKey.toLowerCase();
+      // Match if the identity contains the key as a word, or starts with it
+      const keyPattern = new RegExp(`\\b${normalizedKey}\\b`, 'i');
+      if (keyPattern.test(elementIdentity) || lowercaseIdentity.startsWith(normalizedKey)) {
+        matchedValue = value;
         console.log(
-          `   -> Direct match found in FOR_FILLER["${dataKey}"]:`,
+          `   -> Match found in profile["${dataKey}"]:`,
           matchedValue,
         );
         return formatValue(matchedValue);
@@ -534,16 +713,18 @@ class FieldFiller {
 
   /**
    * Sets the value of a specific element based on matched data.
+   * Returns true if the element was filled, false otherwise.
    */
-  fillElement(targetElement) {
+  async fillElement(targetElement) {
     if (this.shouldIgnoreElement(targetElement)) {
       console.log(`CV_FILLER: Skipping ignored/hidden element:`, targetElement);
-      return;
+      return false;
     }
 
     const inputType = (targetElement.type || "").toLowerCase();
     const tagName = targetElement.tagName.toLowerCase();
     const inputName = (targetElement.name || "").toLowerCase();
+    let isFilled = false;
 
     if (tagName === "input") {
       if (inputType === "radio") {
@@ -560,6 +741,7 @@ class FieldFiller {
           ) {
             console.log(`CV_FILLER: Checking radio button: ${elementIdentity}`);
             targetElement.checked = true;
+            isFilled = true;
           }
         }
       } else if (inputType === "checkbox") {
@@ -576,6 +758,7 @@ class FieldFiller {
             lowVal === "checked"
           ) {
             targetElement.checked = true;
+            isFilled = true;
           } else if (
             lowVal === "no" ||
             lowVal === "false" ||
@@ -583,6 +766,7 @@ class FieldFiller {
             lowVal === "unchecked"
           ) {
             targetElement.checked = false;
+            isFilled = true;
           }
         }
       } else if (inputType === "file") {
@@ -597,38 +781,38 @@ class FieldFiller {
           const contact = profile.Contact || {};
           const cvPath =
             (Array.isArray(contact.cv_link) ? contact.cv_link[1] : "") ||
-            (typeof CV_DATA !== "undefined" && CV_DATA.FOR_FILLER
-              ? CV_DATA.FOR_FILLER.cv_path
-              : "");
-          if (cvPath)
+            (profile.cv_path || "");
+          if (cvPath) {
             console.log(
               "%c CV_FILLER: Detected upload field. Path: " + cvPath,
               "color: #0ea5e9; font-weight: bold;",
             );
+            isFilled = true;
+          }
         }
       } else if (inputType === "password") {
         if (this.isAnyMatch(inputName, this.options.confirmFields)) {
           targetElement.value = this.previousPassword;
         } else {
-          const profile =
+          const profileData =
             (typeof CV_DATA !== "undefined" && CV_DATA.CANDIDATE_PROFILE) || {};
-          const contact = profile.Contact || {};
+          const contactData = profileData.Contact || {};
           this.previousPassword =
-            contact.pwd ||
-            contact.default_password ||
-            (typeof CV_DATA !== "undefined" && CV_DATA.FOR_FILLER
-              ? CV_DATA.FOR_FILLER.password
-              : "") ||
+            contactData.pwd ||
+            contactData.default_password ||
+            (profileData.password || "") ||
             "";
           targetElement.value = this.previousPassword;
         }
         console.log(`CV_FILLER: Filled password field.`);
+        isFilled = true;
       } else if (
         inputType === "email" &&
         this.isAnyMatch(inputName, this.options.confirmFields)
       ) {
         targetElement.value = this.previousValue;
         console.log(`CV_FILLER: Filled email confirmation field.`);
+        isFilled = true;
       } else {
         const generatedValue = this.generateCV_Data(targetElement);
         if (generatedValue) {
@@ -638,6 +822,7 @@ class FieldFiller {
           );
           this.previousValue = generatedValue;
           targetElement.value = generatedValue;
+          isFilled = true;
         }
       }
     } else if (tagName === "textarea") {
@@ -645,6 +830,7 @@ class FieldFiller {
       if (generatedValue) {
         console.log(`CV_FILLER: Filling textarea with:`, generatedValue);
         targetElement.value = generatedValue;
+        isFilled = true;
       }
     } else if (tagName === "select") {
       const generatedValue = this.generateCV_Data(targetElement);
@@ -700,6 +886,7 @@ class FieldFiller {
             `CV_FILLER: Selecting option index ${bestMatchIndex} for "${this.getElementName(targetElement)}"`,
           );
           targetElement.selectedIndex = bestMatchIndex;
+          isFilled = true;
         } else {
           console.warn(
             `CV_FILLER: No matching option found for select "${this.getElementName(targetElement)}" with value "${generatedValue}"`,
@@ -708,7 +895,10 @@ class FieldFiller {
       }
     }
 
-    if (this.options.triggerClickEvents) this.fireEvents(targetElement);
+    if (isFilled && this.options.triggerClickEvents) {
+      await this.fireEvents(targetElement);
+    }
+    return isFilled;
   }
 }
 
@@ -726,51 +916,209 @@ class FillerManager {
   }
 
   /**
-   * Scans a container and fills all supported inputs.
+   * Scans a container (including shadow-roots) and fills all supported inputs.
+   * Returns the number of elements successfully filled.
    */
-  fillAllElements(container = document) {
+  async fillAllElements(container = document, retryCount = 0) {
     if (!this.isEnabled) {
       console.warn("CV_FILLER: Filler is disabled for this domain/profile.");
-      return;
+      return 0;
     }
     this.elementFiller.resetGroupTracking();
-    console.log("CV_FILLER: Starting to fill all elements in:", container);
-    const inputElements = container.querySelectorAll(
-      "input:not(:disabled):not([readonly])",
-    );
-    const textareaElements = container.querySelectorAll(
-      "textarea:not(:disabled):not([readonly])",
-    );
-    const selectElements = container.querySelectorAll(
-      "select:not(:disabled):not([readonly])",
-    );
-    const contentEditableElements = container.querySelectorAll(
-      "[contenteditable='true']",
-    );
+    
+    const host = window.location.host || "top-frame";
+    console.log(`CV_FILLER [${host}]: Scanning container (Attempt ${retryCount + 1}):`, container);
+
+    const getAllElements = (root, selector) => {
+      let results = Array.from(root.querySelectorAll(selector));
+      
+      // Shadow DOM traversal
+      try {
+        const allNodes = root.querySelectorAll("*");
+        for (const node of allNodes) {
+          if (node.shadowRoot) {
+            results = results.concat(getAllElements(node.shadowRoot, selector));
+          }
+        }
+      } catch (e) {}
+      
+      // Same-origin iframe traversal
+      const iframes = root.querySelectorAll("iframe");
+      for (const iframe of iframes) {
+        try {
+          if (iframe.contentDocument) {
+            results = results.concat(getAllElements(iframe.contentDocument, selector));
+          }
+        } catch (error) {}
+      }
+      
+      return results;
+    };
+
+    const inputElements = getAllElements(container, "input:not(:disabled):not([readonly])");
+    const textareaElements = getAllElements(container, "textarea:not(:disabled):not([readonly])");
+    const selectElements = getAllElements(container, "select:not(:disabled):not([readonly])");
+    const contentEditableElements = getAllElements(container, "[contenteditable='true']");
+
+    const totalFound = inputElements.length + textareaElements.length + selectElements.length + contentEditableElements.length;
+    
+    // Retry logic: If we find 0 elements and it's a known job board or iframe, wait and try again
+    if (totalFound === 0 && retryCount < 3) {
+      const isJobBoard = host.includes("greenhouse.io") || host.includes("lever.co") || !!document.getElementById("grnhse_app");
+      if (isJobBoard || window.self !== window.top) {
+        console.log(`CV_FILLER [${host}]: No fields found yet, retrying in 1s...`);
+        await new Promise(r => setTimeout(root, 1000));
+        return this.fillAllElements(container, retryCount + 1);
+      }
+    }
 
     console.log(
-      `CV_FILLER: Found ${inputElements.length} inputs, ${textareaElements.length} textareas, ${selectElements.length} selects, ${contentEditableElements.length} editables.`,
+      `CV_FILLER [${host}]: Found ${inputElements.length} inputs, ${textareaElements.length} textareas, ${selectElements.length} selects, ${contentEditableElements.length} editables.`,
     );
 
-    inputElements.forEach((input) => this.elementFiller.fillElement(input));
-    textareaElements.forEach((textarea) =>
-      this.elementFiller.fillElement(textarea),
-    );
-    selectElements.forEach((select) => this.elementFiller.fillElement(select));
-    contentEditableElements.forEach((editable) => {
-      editable.textContent = this.elementFiller.generateCV_Data(editable);
-      this.elementFiller.fireEvents(editable);
-    });
+    let filledCount = 0;
+    const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    for (const input of inputElements) {
+      if (await this.elementFiller.fillElement(input)) filledCount++;
+      await delay(50);
+    }
+    for (const textarea of textareaElements) {
+      if (await this.elementFiller.fillElement(textarea)) filledCount++;
+      await delay(50);
+    }
+    for (const select of selectElements) {
+      if (await this.elementFiller.fillElement(select)) filledCount++;
+      await delay(50);
+    }
+    for (const editable of contentEditableElements) {
+      const val = this.elementFiller.generateCV_Data(editable);
+      if (val) {
+        editable.textContent = val;
+        await this.elementFiller.fireEvents(editable);
+        filledCount++;
+      }
+      await delay(50);
+    }
+    
+    console.log(`CV_FILLER [${host}]: Finished filling ${filledCount} elements.`);
+
+    // Validate form completeness before clicking
+    await delay(500); 
+    if (filledCount > 0 && this.noEmptyForms(container)) {
+      console.log(`CV_FILLER [${host}]: Form validation passed. Proceeding to click button.`);
+      await this.clickSubmitButton(container);
+    } else if (filledCount === 0) {
+      console.log(`CV_FILLER [${host}]: No elements were filled. Skipping auto-click.`);
+    } else {
+      console.warn(`CV_FILLER [${host}]: Form is incomplete. Stopping auto-click.`);
+    }
+    
+    return filledCount;
   }
 
-  fillAllInputs() {
-    this.fillAllElements(document);
+  /**
+   * Validates that all visible and supported inputs in the container have values.
+   */
+  noEmptyForms(container = document) {
+    const getAllInputs = (root) => {
+      let results = Array.from(root.querySelectorAll("input, textarea, select"));
+      const allNodes = root.querySelectorAll("*");
+      for (const node of allNodes) {
+        if (node.shadowRoot) results = results.concat(getAllInputs(node.shadowRoot));
+      }
+      return results;
+    };
+
+    const inputs = getAllInputs(container);
+    if (inputs.length === 0) return false;
+
+    let isComplete = true;
+    for (const element of inputs) {
+      if (this.elementFiller.shouldIgnoreElement(element)) continue;
+      
+      const type = (element.type || "").toLowerCase();
+      const tagName = element.tagName.toLowerCase();
+
+      // Only fail validation for required or important fields that are empty
+      if (tagName === "input" && ["text", "email", "tel"].includes(type)) {
+        if (!element.value || element.value.trim() === "") {
+          // If it has 'required' attribute, it's a hard fail
+          if (element.required || element.getAttribute("aria-required") === "true") {
+            console.log(`CV_FILLER: Validation failed - Empty required field: ${this.elementFiller.getElementName(element)}`);
+            isComplete = false;
+          }
+        }
+      }
+    }
+    return isComplete;
+  }
+
+  /**
+   * Finds and clicks the first visible 'Apply', 'Next', 'Review', or 'Submit' button.
+   */
+  async clickSubmitButton(container = document) {
+    // Keywords sorted by progression priority
+    const submitKeywords = ["submit application", "review", "next", "submit", "apply"];
+    
+    // Select common button-like elements
+    const buttons = Array.from(
+      container.querySelectorAll('button, input[type="submit"], input[type="button"], [role="button"]')
+    );
+
+    for (const keyword of submitKeywords) {
+      for (const button of buttons) {
+        // Skip buttons that are disabled, hidden, or explicitly marked as 'back'
+        if (
+          button.disabled ||
+          button.getAttribute("aria-disabled") === "true" ||
+          button.offsetParent === null
+        ) {
+          continue;
+        }
+
+        const text = (button.innerText || button.textContent || button.value || "").toLowerCase();
+        const aria = (button.getAttribute("aria-label") || "").toLowerCase();
+        const id = (button.id || "").toLowerCase();
+
+        // Check if any child span contains the keyword (specifically for LinkedIn)
+        const spans = Array.from(button.querySelectorAll("span"));
+        const spanTextMatch = spans.some(span => (span.innerText || "").toLowerCase().includes(keyword));
+
+        // Priority matching
+        if (
+          (text.includes(keyword) || aria.includes(keyword) || id.includes(keyword) || spanTextMatch) &&
+          !text.includes("back") &&
+          !aria.includes("back")
+        ) {
+          console.log(`CV_FILLER: Automatically clicking button: "${text.trim().split("\n")[0] || keyword}"`);
+          button.click();
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  async fillAllInputs() {
+    // Priority: Target LinkedIn's Easy Apply modal, Greenhouse app, or any active modal/dialog
+    const mainContainer = 
+      document.querySelector(".jobs-easy-apply-content, .artdeco-modal__content, .artdeco-modal") ||
+      document.getElementById("grnhse_app") ||
+      document.querySelector("[role='dialog']");
+    
+    if (mainContainer) {
+      console.log(`CV_FILLER [${window.location.host}]: Focused container detected. Focusing on this container.`);
+      await this.fillAllElements(mainContainer);
+    } else {
+      await this.fillAllElements(document);
+    }
   }
 
   /**
    * Fills only the currently active or clicked input.
    */
-  fillThisInput() {
+  async fillThisInput() {
     if (!this.isEnabled) return;
     const targetElement = this.clickedElement || document.activeElement;
     if (targetElement) {
@@ -781,7 +1129,7 @@ class FillerManager {
         tagName === "select" ||
         targetElement.isContentEditable
       ) {
-        this.elementFiller.fillElement(targetElement);
+        await this.elementFiller.fillElement(targetElement);
       }
     }
     this.clickedElement = null;
@@ -790,13 +1138,13 @@ class FillerManager {
   /**
    * Fills all inputs in the form containing the active element.
    */
-  fillThisForm() {
+  async fillThisForm() {
     if (!this.isEnabled) return;
     const targetElement = this.clickedElement || document.activeElement;
     if (targetElement && targetElement.tagName.toLowerCase() !== "body") {
       const parentForm = targetElement.closest("form");
-      if (parentForm) this.fillAllElements(parentForm);
-      else this.fillAllElements(document); // Fallback to whole page
+      if (parentForm) await this.fillAllElements(parentForm);
+      else await this.fillAllElements(document); // Fallback to whole page
     }
     this.clickedElement = null;
   }
